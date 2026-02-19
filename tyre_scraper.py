@@ -1,19 +1,25 @@
 """
 Motorcycle Tyre Price Scraper — anvelopemoto.eu
 ================================================
-Scrapes tyre listings from https://www.anvelopemoto.eu/
+Scrapes ALL tyres from https://www.anvelopemoto.eu/anvelope-moto/
+
+Key facts about the site (CS-Cart):
+  - 15 products per page by default
+  - Pagination URLs: /anvelope-moto/page-2/, /anvelope-moto/page-3/, etc.
+  - "Next page" link text is "Urmatorul" (Romanian)
+  - Prices are plain text (no CSS class), e.g. "67,01 lei" and "247,32 lei"
+  - Each product card is separated by <hr> tags on listing pages
 
 Usage:
     pip install requests beautifulsoup4 lxml
-    python tyre_scraper.py
-    python tyre_scraper.py --search "michelin road 6"
-    python tyre_scraper.py --search "pirelli" --pages 5
-    python tyre_scraper.py --category anvelope-moto --pages 10
+    python tyre_scraper.py                               # ALL tyres (all pages)
+    python tyre_scraper.py --search "michelin road 6"   # keyword search
+    python tyre_scraper.py --category lichidari-de-stoc # other section
     python tyre_scraper.py --help
 
 Output:
-    tyre_results.json  — load into tyre_dashboard.html to visualise
-    tyre_results.csv   — open in Excel / Google Sheets
+    tyre_results.json  ← load into tyre_dashboard.html
+    tyre_results.csv   ← open in Excel
 """
 
 import argparse
@@ -22,7 +28,7 @@ import json
 import re
 import time
 from datetime import datetime
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -44,239 +50,340 @@ HEADERS = {
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
 
+# Matches Romanian prices like "67,01" or "1.335,62" followed by "lei"
+PRICE_RE = re.compile(r"([\d]{1,4}(?:\.\d{3})*,\d{2})\s*lei")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def clean_price(price_str: str) -> float | None:
-    """Parse a price like '1.397,47 lei' → 1397.47 (Romanian number format)."""
-    s = price_str.strip()
-    s = re.sub(r"[^\d.,]", "", s)
-    # Romanian format: dot = thousands sep, comma = decimal
-    s = s.replace(".", "").replace(",", ".")
+def parse_ron(s: str) -> float | None:
+    """'1.335,62' → 1335.62"""
     try:
-        return float(s)
-    except ValueError:
+        return float(s.replace(".", "").replace(",", "."))
+    except (ValueError, AttributeError):
         return None
 
 
-def parse_product_cards(soup: BeautifulSoup) -> list[dict]:
-    """
-    Extract all product cards from a parsed anvelopemoto.eu page.
+def fmt(s: str) -> str:
+    return f"{s} lei" if s else ""
 
-    The site runs CS-Cart. Product anchors have a `title` attribute with the
-    full product name and an `href` pointing to the product URL. Prices appear
-    as text containing 'lei' nearby.
+
+def fetch(url: str) -> BeautifulSoup | None:
+    try:
+        r = SESSION.get(url, timeout=20)
+        r.raise_for_status()
+        return BeautifulSoup(r.text, "lxml")
+    except requests.RequestException as e:
+        print(f"    ✗ {e}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Product card parser — works on listing pages
+# ─────────────────────────────────────────────────────────────────────────────
+
+def parse_listing_page(soup: BeautifulSoup) -> list[dict]:
+    """
+    On listing pages, each product is a block of HTML separated by <hr> tags.
+    Each block contains:
+      - An <a title="..."> link to the product page
+      - Product code ("Cod produs: ...")
+      - Two prices as plain text: sale price first, original (higher) price second
+        e.g. "67,01 lei" then "247,32 lei"
+      - Availability text ("Stoc Bucuresti", "la comanda", "Momentan Indisponibil")
+      - Optional discount label in the <a> tag text or nearby span
     """
     results = []
-    seen_urls = set()
 
-    for link in soup.select("a[title][href]"):
-        href  = link.get("href", "")
-        title = link.get("title", "").strip()
+    # Each product card sits between <hr> separators in the main content area.
+    # We find all product links (they have a title= and point to a product slug).
+    product_links = []
+    for a in soup.select("a[title][href]"):
+        href  = a.get("href", "")
+        title = a.get("title", "").strip()
+        # Product URLs: https://www.anvelopemoto.eu/<slug>/
+        # They have a meaningful title and no utility keywords
+        if (
+            href.startswith("https://www.anvelopemoto.eu/")
+            and title
+            and len(title) > 8
+            and not any(x in href for x in [
+                "dispatch=", "/blog", "profiles", "compare", "wishlist",
+                "locatia", "intrebari", "garantie", "pages.view", "fan-zone",
+                "/accesorii", "/camere-de-aer", "/consumabile", "/rim-band",
+                "/mousse", "/tubliss", "/rim-lock", "/uleiuri", "/transmisie",
+                "/diverse", "/montaj", "/contragreutati", "/valve", "/petice",
+                "/alligator", "/avon", "/bridgestone/", "/cheng-shin", "/continental",
+                "/cst", "/dunlop/", "/duro", "/eurogrip", "/heidenau/",
+                "/irc", "/kenda", "/maxxis", "/mefo", "/metzeler/", "/michelin/",
+                "/mitas/", "/motorex", "/motul", "/pirelli/", "/plews/",
+                "/schwalbe", "/shinko/", "/vee-rubber", "/vipal",
+                "/anvelope-moto/", "/lichidari-de-stoc/", "/ek/", "/duro/",
+                "/goldspeed/", "/heidenau-racing/", "/hiflo/", "/hofmann/",
+                "/hutchinson/", "/jmp/", "/kn/", "/lampa/",
+            ])
+        ):
+            product_links.append((href, title, a))
 
-        # Only product detail links (they have a descriptive slug)
-        if not title or len(title) < 8:
-            continue
-        if not href.startswith("https://www.anvelopemoto.eu/") and not href.startswith("/"):
-            continue
-        # Skip menus, blog, brand pages, dispatch URLs
-        if any(x in href for x in ["dispatch=", "/blog", "profiles", "compare", "wishlist",
-                                     "locatia", "intrebari", "garantie", "pages.view",
-                                     "fan-zone", "consumabile", "camere-de-aer", "accesorii"]):
-            continue
-        # Product pages have a trailing slash and unique slug
+    # Deduplicate by URL (same product can appear in multiple sections)
+    seen_urls: set[str] = set()
+
+    for href, title, anchor in product_links:
         if href in seen_urls:
             continue
         seen_urls.add(href)
 
-        # Walk up DOM to find a container with price info
-        parent = link.find_parent(class_=re.compile(
-            r"(gl-list|grid|product|item|ty-column|ut2-gl|list-item)", re.I
-        ))
-        if not parent:
-            parent = link.find_parent("li") or link.find_parent("div")
-        if not parent:
-            continue
+        # Find the nearest container that holds price info.
+        # Walk up from the anchor until we find a block with "lei" in text.
+        container = None
+        for parent in anchor.parents:
+            if parent.name in ("body", "html", "main", "nav", "header", "footer"):
+                break
+            text = parent.get_text(" ", strip=True)
+            if "lei" in text and len(text) < 3000:
+                container = parent
+                break
 
-        parent_text = parent.get_text(" ", strip=True)
+        raw_text = container.get_text(" ", strip=True) if container else ""
 
-        # Extract all price strings from the parent block
-        price_matches = re.findall(r"[\d]{1,4}(?:[.,]\d{3})*(?:[.,]\d{2})?\s*lei", parent_text)
-        price_matches = [p.strip() for p in price_matches]
+        # ── Prices ──────────────────────────────────────────────────────────
+        # PRICE_RE finds all "X,XX lei" or "X.XXX,XX lei" patterns
+        price_matches = PRICE_RE.findall(raw_text)
 
-        sale_price     = None
-        original_price = None
+        # Filter out nonsense (e.g. "1 buc." quantities that look price-like)
+        numeric = [(p, parse_ron(p)) for p in price_matches if parse_ron(p)]
 
-        if len(price_matches) >= 2:
-            # First is typically the original (higher), last is the sale price
-            original_price = price_matches[0]
-            sale_price     = price_matches[-1]
-            # Sanity check: sale should be lower
-            op = clean_price(original_price)
-            sp = clean_price(sale_price)
-            if op and sp and sp > op:
-                sale_price, original_price = original_price, sale_price
-        elif len(price_matches) == 1:
-            sale_price = price_matches[0]
+        sale_price_str = ""
+        orig_price_str = ""
+        price_value    = None
 
-        price_value = clean_price(sale_price) if sale_price else None
+        if numeric:
+            # Sort ascending; sale price is lowest, original is highest
+            numeric_sorted = sorted(numeric, key=lambda x: x[1])
+            sale_price_str, price_value = numeric_sorted[0]
+            if len(numeric_sorted) > 1:
+                orig_price_str = numeric_sorted[-1][0]
 
-        # Stock availability
-        in_stock = "Momentan Indisponibil" not in parent_text
+        # ── Availability ─────────────────────────────────────────────────────
+        avail_text = raw_text.lower()
+        if "momentan indisponibil" in avail_text:
+            in_stock   = False
+            availability = "Out of stock"
+        elif "stoc bucuresti" in avail_text:
+            in_stock   = True
+            availability = "In stock (Bucharest)"
+        elif "in stoc furnizor" in avail_text:
+            in_stock   = True
+            availability = "In stock (supplier)"
+        elif "la comanda" in avail_text:
+            in_stock   = True
+            availability = "Order only"
+        else:
+            in_stock   = True
+            availability = "Unknown"
 
-        # Discount label
-        discount_match = re.search(r"Reducere\s+(\d+%)", parent_text)
-        discount = discount_match.group(0) if discount_match else ""
+        # ── Discount ─────────────────────────────────────────────────────────
+        disc_match = re.search(r"Reducere\s+(\d+%)", raw_text)
+        discount   = f"Reducere {disc_match.group(1)}" if disc_match else ""
 
-        full_url = href if href.startswith("http") else BASE_URL + href
+        # ── Product code ─────────────────────────────────────────────────────
+        cod_match = re.search(r"Cod produs:\s*(\S+)", raw_text)
+        product_code = cod_match.group(1) if cod_match else ""
 
         results.append({
-            "source":          SOURCE,
-            "name":            title,
-            "price":           sale_price or "—",
-            "original_price":  original_price or "",
-            "price_value":     price_value,
-            "currency":        "RON (lei)",
-            "discount":        discount,
-            "in_stock":        in_stock,
-            "shop":            SOURCE,
-            "url":             full_url,
-            "scraped_at":      datetime.now().isoformat(),
+            "source":        SOURCE,
+            "name":          title,
+            "price":         fmt(sale_price_str),
+            "original_price":fmt(orig_price_str),
+            "price_value":   price_value,
+            "currency":      "RON (lei)",
+            "discount":      discount,
+            "availability":  availability,
+            "in_stock":      in_stock,
+            "product_code":  product_code,
+            "shop":          SOURCE,
+            "url":           href,
+            "scraped_at":    datetime.now().isoformat(),
         })
 
     return results
 
 
-def deduplicate(results: list[dict]) -> list[dict]:
-    seen = set()
-    out  = []
-    for r in results:
-        key = r["url"]
-        if key not in seen:
-            seen.add(key)
-            out.append(r)
-    return out
+# ─────────────────────────────────────────────────────────────────────────────
+# Pagination
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_all_page_urls(soup: BeautifulSoup, base_category_url: str) -> list[str]:
+    """
+    Extract ALL pagination URLs from a category page.
+    The site shows links like: page-2, page-3 ... page-8, then page-9 ("2-16")
+    We find the highest page number and build the full list.
+    """
+    page_urls = [base_category_url]  # page 1
+
+    # Find all pagination links
+    page_numbers = set()
+    for a in soup.select("a[href]"):
+        href = a.get("href", "")
+        m = re.search(r"/page-(\d+)/?$", href)
+        if m:
+            page_numbers.add(int(m.group(1)))
+
+    # Also look for "2 - 16" style grouped links
+    for a in soup.select("a[href]"):
+        href = a.get("href", "")
+        m = re.search(r"/page-(\d+)/?$", href)
+        if m:
+            # The text of this link might tell us the range, e.g. "2 - 16"
+            text = a.get_text(strip=True)
+            range_m = re.match(r"(\d+)\s*-\s*(\d+)", text)
+            if range_m:
+                for n in range(int(range_m.group(1)), int(range_m.group(2)) + 1):
+                    page_numbers.add(n)
+
+    for n in sorted(page_numbers):
+        # Build URL: strip trailing slash, append /page-N/
+        base = base_category_url.rstrip("/")
+        page_urls.append(f"{base}/page-{n}/")
+
+    return page_urls
+
+
+def get_next_page_url(soup: BeautifulSoup) -> str | None:
+    """Fallback: find the 'Urmatorul' (Next) link for sequential pagination."""
+    for a in soup.select("a[href]"):
+        text = a.get_text(strip=True)
+        href = a.get("href", "")
+        if "Urmatorul" in text or "urmatorul" in text.lower():
+            return href if href.startswith("http") else urljoin(BASE_URL, href)
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Page fetcher
+# High-level scrape functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-def scrape_page(url: str, label: str = "") -> tuple[list[dict], str | None]:
-    """Fetch one page, return (products, next_page_url_or_None)."""
-    try:
-        r = SESSION.get(url, timeout=20)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        print(f"    ✗ Request error: {e}")
-        return [], None
-
-    soup = BeautifulSoup(r.text, "lxml")
-    products = parse_product_cards(soup)
-    print(f"    → {len(products)} products  ({label or url})")
-
-    # Next-page link (CS-Cart pagination)
-    next_link = (
-        soup.select_one("a.ty-pagination__next")
-        or soup.select_one("a[rel='next']")
-        or soup.select_one(".ty-pagination .ty-pagination__item:last-child a")
-    )
-    next_url = None
-    if next_link:
-        href = next_link.get("href", "")
-        if href and "page=" in href:
-            next_url = href if href.startswith("http") else BASE_URL + href
-
-    return products, next_url
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# High-level scrapers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def scrape_category(slug: str, max_pages: int = 10) -> list[dict]:
-    """Browse all pages of a category by its URL slug."""
+def scrape_category(slug: str, max_pages: int = 999) -> list[dict]:
+    """Scrape ALL pages of a category."""
     start_url = f"{BASE_URL}/{slug}/"
-    all_products: list[dict] = []
-    url  = start_url
-    page = 1
+    all_results: list[dict] = []
 
-    print(f"\n📂 Category: /{slug}/  (max {max_pages} pages)")
-    while url and page <= max_pages:
-        print(f"  Page {page}:")
-        products, next_url = scrape_page(url, f"page {page}")
-        all_products.extend(products)
-        if not products:
-            print("    (no products found — stopping)")
-            break
-        url = next_url
-        page += 1
-        if url:
-            time.sleep(1.5)
+    print(f"\n📂 Scraping category: /{slug}/")
 
-    return all_products
+    # Fetch page 1 first to discover all page URLs
+    print(f"  Fetching page 1 to discover pagination...")
+    soup1 = fetch(start_url)
+    if soup1 is None:
+        print("  ✗ Failed to fetch first page.")
+        return []
+
+    page_urls = get_all_page_urls(soup1, start_url)
+    total_pages = min(len(page_urls), max_pages)
+    print(f"  Discovered {len(page_urls)} pages — will scrape {total_pages}")
+
+    # Parse page 1
+    p1_results = parse_listing_page(soup1)
+    print(f"  Page 1: {len(p1_results)} products")
+    all_results.extend(p1_results)
+
+    # Scrape remaining pages
+    for i, url in enumerate(page_urls[1:total_pages], start=2):
+        time.sleep(1.2)
+        print(f"  Page {i}/{total_pages}: {url}")
+        soup = fetch(url)
+        if soup is None:
+            continue
+        results = parse_listing_page(soup)
+        print(f"    → {len(results)} products")
+        all_results.extend(results)
+
+    return all_results
 
 
-def scrape_search(query: str, max_pages: int = 10) -> list[dict]:
-    """Search anvelopemoto.eu for a keyword/model/size."""
+def scrape_search(query: str, max_pages: int = 50) -> list[dict]:
+    """Search and scrape all result pages."""
     start_url = f"{BASE_URL}/index.php?dispatch=products.search&q={quote_plus(query)}"
-    all_products: list[dict] = []
+    all_results: list[dict] = []
     url  = start_url
     page = 1
 
-    print(f"\n🔍 Search: '{query}'  (max {max_pages} pages)")
+    print(f"\n🔍 Searching: '{query}'")
+
     while url and page <= max_pages:
-        print(f"  Page {page}:")
-        products, next_url = scrape_page(url, f"page {page}")
-        all_products.extend(products)
-        if not products:
+        print(f"  Page {page}: {url}")
+        soup = fetch(url)
+        if soup is None:
             break
-        url = next_url
+
+        results = parse_listing_page(soup)
+        print(f"    → {len(results)} products")
+        all_results.extend(results)
+
+        if not results:
+            break
+
+        url = get_next_page_url(soup)
         page += 1
         if url:
-            time.sleep(1.5)
+            time.sleep(1.2)
 
-    return all_products
+    return all_results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output
 # ─────────────────────────────────────────────────────────────────────────────
 
+def deduplicate(results: list[dict]) -> list[dict]:
+    seen, out = set(), []
+    for r in results:
+        if r["url"] not in seen:
+            seen.add(r["url"])
+            out.append(r)
+    return out
+
+
 def save_results(results: list[dict], base_name: str = "tyre_results") -> None:
     results = deduplicate(results)
 
-    # JSON (for dashboard)
     with open(f"{base_name}.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
-    print(f"\n✅ {len(results)} unique products → {base_name}.json")
+    print(f"\n✅ Saved {len(results)} unique products → {base_name}.json")
 
-    # CSV
     if results:
         with open(f"{base_name}.csv", "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=results[0].keys())
             writer.writeheader()
             writer.writerows(results)
-        print(f"✅ {len(results)} unique products → {base_name}.csv")
+        print(f"✅ Saved {len(results)} unique products → {base_name}.csv")
 
-    # Terminal summary — cheapest in-stock tyres
-    priced = sorted(
-        [r for r in results if r.get("price_value") and r["in_stock"]],
-        key=lambda x: x["price_value"],
-    )
-    if priced:
+    # ── Summary ──────────────────────────────────────────────────────────────
+    priced    = [r for r in results if r.get("price_value")]
+    in_stock  = [r for r in priced  if r["in_stock"]]
+    no_price  = [r for r in results if not r.get("price_value")]
+
+    if in_stock:
+        top = sorted(in_stock, key=lambda x: x["price_value"])
         print(f"\n📊 Cheapest in-stock tyres:")
-        print(f"  {'Price (lei)':>14}  {'Discount':>12}  Name")
-        print("  " + "─" * 75)
-        for r in priced[:25]:
-            disc = r.get("discount", "")
-            print(f"  {r['price']:>14}  {disc:>12}  {r['name'][:55]}")
+        print(f"  {'Sale Price':>14}  {'Original':>14}  {'Disc':>10}  Name")
+        print("  " + "─" * 80)
+        for r in top[:30]:
+            print(
+                f"  {r['price']:>14}  "
+                f"{(r.get('original_price') or '—'):>14}  "
+                f"{(r.get('discount') or '—'):>10}  "
+                f"{r['name'][:50]}"
+            )
 
-    out_of_stock = len([r for r in results if not r["in_stock"]])
-    print(f"\n  Total: {len(results)}  |  In stock: {len(priced)}  |  Out of stock: {out_of_stock}")
-    print("\n💡 Open tyre_dashboard.html in your browser to visualise results.")
+    print(f"\n  ┌─────────────────────────────────")
+    print(f"  │ Total scraped : {len(results)}")
+    print(f"  │ With price    : {len(priced)}")
+    print(f"  │ In stock      : {len(in_stock)}")
+    print(f"  │ No price found: {len(no_price)}")
+    print(f"  └─────────────────────────────────")
+    print("\n💡 Open tyre_dashboard.html to visualise results.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,58 +392,37 @@ def save_results(results: list[dict], base_name: str = "tyre_results") -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Motorcycle tyre price scraper — anvelopemoto.eu",
+        description="Scrape ALL motorcycle tyres from anvelopemoto.eu",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Scrape the full tyre catalogue (default, up to 10 pages)
-  python tyre_scraper.py
-
-  # Search for a specific brand/model/size
-  python tyre_scraper.py --search "michelin road 6"
-  python tyre_scraper.py --search "pirelli angel gt"
-  python tyre_scraper.py --search "120/70 ZR17"
-  python tyre_scraper.py --search "dunlop" --pages 5
-
-  # Scrape a specific category
-  python tyre_scraper.py --category lichidari-de-stoc
-  python tyre_scraper.py --category anvelope-moto --pages 20
+  python tyre_scraper.py                                # ALL tyres, all pages
+  python tyre_scraper.py --search "michelin road 6"    # specific model
+  python tyre_scraper.py --search "120/70 ZR17"        # by size
+  python tyre_scraper.py --category lichidari-de-stoc  # clearance section
+  python tyre_scraper.py --pages 3                     # limit to 3 pages
         """,
     )
-    parser.add_argument(
-        "--search",
-        help="Keyword / brand / model / size to search for",
-    )
-    parser.add_argument(
-        "--category",
-        default="anvelope-moto",
-        help="Category slug to browse (default: anvelope-moto)",
-    )
-    parser.add_argument(
-        "--pages",
-        type=int,
-        default=10,
-        help="Maximum pages to scrape (default: 10)",
-    )
-    parser.add_argument(
-        "--out",
-        default="tyre_results",
-        help="Output file name base (default: tyre_results)",
-    )
+    parser.add_argument("--search",   help="Search keyword (brand / model / size)")
+    parser.add_argument("--category", default="anvelope-moto",
+                        help="Category slug (default: anvelope-moto = all tyres)")
+    parser.add_argument("--pages",    type=int, default=999,
+                        help="Max pages to scrape (default: all pages)")
+    parser.add_argument("--out",      default="tyre_results",
+                        help="Output filename base (default: tyre_results)")
     args = parser.parse_args()
 
-    print("🏍️  anvelopemoto.eu — Tyre Price Scraper")
-    print("=" * 45)
+    print("🏍️  anvelopemoto.eu — Full Tyre Catalogue Scraper")
+    print("=" * 50)
 
-    if args.search:
-        results = scrape_search(args.search, max_pages=args.pages)
-    else:
-        results = scrape_category(args.category, max_pages=args.pages)
+    results = (
+        scrape_search(args.search, max_pages=args.pages)
+        if args.search
+        else scrape_category(args.category, max_pages=args.pages)
+    )
 
     if not results:
-        print("\n⚠️  No products scraped.")
-        print("   • Try --search with a brand name: python tyre_scraper.py --search 'michelin'")
-        print("   • The site structure may have changed; check the selectors in parse_product_cards()")
+        print("\n⚠️  No products found.")
         return
 
     save_results(results, args.out)
