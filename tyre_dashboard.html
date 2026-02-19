@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Moto Tyre Price Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #0d0f12;
+    --surface: #151820;
+    --surface2: #1c2130;
+    --border: #252b3a;
+    --accent: #f5a623;
+    --accent2: #e8341c;
+    --green: #26d97f;
+    --text: #e8eaf0;
+    --muted: #6b7594;
+    --font-head: 'Barlow Condensed', sans-serif;
+    --font-mono: 'DM Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    min-height: 100vh;
+    font-size: 13px;
+  }
+
+  /* noise overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 0;
+  }
+
+  header {
+    background: var(--surface);
+    border-bottom: 2px solid var(--accent);
+    padding: 20px 32px;
+    display: flex; align-items: center; gap: 16px;
+    position: relative; z-index: 1;
+  }
+
+  .logo {
+    font-family: var(--font-head);
+    font-size: 36px; font-weight: 900;
+    letter-spacing: -1px;
+    line-height: 1;
+  }
+  .logo span { color: var(--accent); }
+
+  .tagline {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 2px;
+    margin-top: 4px;
+  }
+
+  .status-pill {
+    margin-left: auto;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 6px 16px;
+    font-size: 11px; color: var(--muted);
+    letter-spacing: 1px;
+  }
+  .status-pill.live { color: var(--green); border-color: var(--green); }
+
+  main {
+    max-width: 1300px; margin: 0 auto;
+    padding: 32px 24px;
+    position: relative; z-index: 1;
+  }
+
+  /* Controls */
+  .controls {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+
+  .controls h2 {
+    font-family: var(--font-head);
+    font-size: 20px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px;
+    color: var(--accent);
+    margin-bottom: 16px;
+  }
+
+  .input-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr auto;
+    gap: 12px;
+    align-items: end;
+  }
+
+  label { display: block; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 6px; }
+
+  input, select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  select option { background: var(--surface2); }
+
+  .btn-scrape {
+    background: var(--accent);
+    color: #000;
+    border: none; border-radius: 3px;
+    font-family: var(--font-head);
+    font-size: 16px; font-weight: 700;
+    letter-spacing: 1px; text-transform: uppercase;
+    padding: 10px 28px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    white-space: nowrap;
+  }
+  .btn-scrape:hover { background: #ffc040; }
+  .btn-scrape:active { transform: scale(0.97); }
+
+  /* Instructions box */
+  .instructions {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    font-size: 12px;
+    line-height: 1.8;
+  }
+  .instructions strong { color: var(--accent); }
+  .instructions code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 2px 6px;
+    font-size: 11px;
+    color: var(--green);
+  }
+
+  /* Stats bar */
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px 20px;
+  }
+  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; }
+  .stat-value {
+    font-family: var(--font-head);
+    font-size: 32px; font-weight: 900;
+    color: var(--text);
+    line-height: 1.1;
+    margin-top: 4px;
+  }
+  .stat-value.green { color: var(--green); }
+  .stat-value.amber { color: var(--accent); }
+
+  /* Table */
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .table-header {
+    display: flex; align-items: center;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+
+  .table-header h2 {
+    font-family: var(--font-head);
+    font-size: 18px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px;
+  }
+
+  .filter-input {
+    margin-left: auto;
+    width: 220px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  thead th {
+    text-align: left;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--muted);
+    padding: 10px 16px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  thead th:hover { color: var(--accent); }
+  thead th .sort-icon { margin-left: 4px; opacity: 0.4; }
+  thead th.sorted .sort-icon { opacity: 1; color: var(--accent); }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+  }
+  tbody tr:hover { background: var(--surface2); }
+  tbody tr.best-price { border-left: 3px solid var(--green); }
+
+  td {
+    padding: 11px 16px;
+    font-size: 12px;
+    vertical-align: middle;
+  }
+
+  .td-name { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .price-badge {
+    font-family: var(--font-head);
+    font-size: 18px; font-weight: 700;
+    color: var(--text);
+  }
+  .price-badge.best { color: var(--green); }
+
+  .source-badge {
+    display: inline-block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 3px 8px;
+    border-radius: 2px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+
+  .link-btn {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+  }
+  .link-btn:hover { text-decoration: underline; }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+  }
+  .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+  .empty-state p { line-height: 1.8; }
+
+  .load-btn {
+    background: var(--surface2);
+    border: 1px dashed var(--border);
+    border-radius: 3px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 8px 20px;
+    cursor: pointer;
+    margin-top: 16px;
+    transition: border-color 0.2s;
+  }
+  .load-btn:hover { border-color: var(--accent); }
+
+  .demo-notice {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent2);
+    border-radius: 3px;
+    padding: 10px 16px;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  @media (max-width: 768px) {
+    .input-row { grid-template-columns: 1fr 1fr; }
+    .stats-bar { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">ANVELOPE<span>MOTO</span>.SCAN</div>
+    <div class="tagline">anvelopemoto.eu — Price Tracker</div>
+  </div>
+  <div class="status-pill" id="status-pill">OFFLINE</div>
+</header>
+
+<main>
+
+  <div class="instructions">
+    <strong>HOW TO USE:</strong><br/>
+    1. Install deps: <code>pip install requests beautifulsoup4 lxml</code><br/>
+    2. Scrape all tyres: <code>python tyre_scraper.py</code> &nbsp;|&nbsp; Search: <code>python tyre_scraper.py --search "michelin road 6"</code><br/>
+    3. Click <strong>Load tyre_results.json</strong> below to visualise results.<br/>
+    Prices are in <strong>RON (lei)</strong>. Hit <strong>Load Demo Data</strong> to preview the dashboard with sample data.
+  </div>
+
+  <div class="controls">
+    <h2>⚙ Command Builder</h2>
+    <div class="input-row">
+      <div>
+        <label>Brand / Model / Size</label>
+        <input id="inp-brand" type="text" placeholder="e.g. Michelin Road 6" oninput="buildCmd()"/>
+      </div>
+      <div>
+        <label>Category (optional)</label>
+        <input id="inp-size" type="text" placeholder="e.g. lichidari-de-stoc" oninput="buildCmd()"/>
+      </div>
+      <div>
+        <label>Generated Command</label>
+        <input id="cmd-out" type="text" readonly style="color:var(--green); cursor:text;" value="python tyre_scraper.py"/>
+      </div>
+      <button class="btn-scrape" onclick="copyCmd()">📋 COPY</button>
+    </div>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="stat-label">Results Found</div>
+      <div class="stat-value" id="stat-count">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Cheapest Price</div>
+      <div class="stat-value green" id="stat-min">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Average Price</div>
+      <div class="stat-value amber" id="stat-avg">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Sources Scraped</div>
+      <div class="stat-value" id="stat-sources">—</div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-header">
+      <h2>Results</h2>
+      <input class="filter-input" type="text" placeholder="Filter results…" oninput="filterTable(this.value)"/>
+    </div>
+
+    <div id="empty-state" class="empty-state">
+      <div class="icon">🏍️</div>
+      <p>No data loaded yet.<br/>Run the scraper then load the JSON file below.</p>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:20px;">
+        <button class="load-btn" onclick="document.getElementById('file-input').click()">📂 Load tyre_results.json</button>
+        <button class="load-btn" onclick="loadDemo()">🎯 Load Demo Data</button>
+      </div>
+      <input id="file-input" type="file" accept=".json" style="display:none" onchange="loadFile(event)"/>
+    </div>
+
+    <table id="results-table" style="display:none">
+      <thead>
+        <tr>
+          <th onclick="sortTable('name')" data-col="name">Product <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable('price_value')" data-col="price_value">Sale Price <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable('original_price')" data-col="original_price">Original <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable('discount')" data-col="discount">Discount <span class="sort-icon">⇅</span></th>
+          <th onclick="sortTable('in_stock')" data-col="in_stock">Stock <span class="sort-icon">⇅</span></th>
+          <th>Link</th>
+        </tr>
+      </thead>
+      <tbody id="results-body"></tbody>
+    </table>
+  </div>
+
+  <div style="margin-top:12px; text-align:center;">
+    <button class="load-btn" onclick="document.getElementById('file-input2').click()" id="reload-btn">📂 Load / Reload JSON</button>
+    <input id="file-input2" type="file" accept=".json" style="display:none" onchange="loadFile(event)"/>
+  </div>
+
+</main>
+
+<script>
+let allData = [];
+let sortCol = 'price_value';
+let sortAsc = true;
+let filterText = '';
+let bestPrice = Infinity;
+
+function buildCmd() {
+  const search   = document.getElementById('inp-brand').value.trim();
+  const category = document.getElementById('inp-size').value.trim();
+  let cmd = 'python tyre_scraper.py';
+  if (search)   cmd += ` --search "${search}"`;
+  if (category) cmd += ` --category "${category}"`;
+  document.getElementById('cmd-out').value = cmd;
+}
+
+function copyCmd() {
+  const cmd = document.getElementById('cmd-out').value;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = document.querySelector('.btn-scrape');
+    btn.textContent = '✅ COPIED!';
+    setTimeout(() => btn.textContent = '📋 COPY', 1500);
+  });
+}
+
+function loadFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      renderData(data);
+    } catch {
+      alert('Invalid JSON file.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function loadDemo() {
+  const demo = [
+    { name: "Michelin Road 6 GT 120/70 ZR 17 58(W) TL Front",     price: "723,71 lei",  original_price: "1.397,47 lei", price_value: 723.71,  currency: "RON (lei)", discount: "Reducere 48%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/michelin-road-6-gt-120-70-zr-17-58-w-tl-front/" },
+    { name: "Michelin Road 6 120/70 ZR 17 58(W) TL Front",        price: "695,46 lei",  original_price: "1.335,62 lei", price_value: 695.46,  currency: "RON (lei)", discount: "Reducere 48%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/michelin-road-6-120-70-zr-17-58-w-tl-front/" },
+    { name: "Michelin Road 6 180/55 ZR 17 73(W) TL Rear",         price: "976,80 lei",  original_price: "1.916,91 lei", price_value: 976.80,  currency: "RON (lei)", discount: "Reducere 49%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/michelin-road-6-180-55-zr-17-73-w-tl-rear/" },
+    { name: "Pirelli Angel ST 120/70 ZR 17 M/C (58W) TL Front",   price: "424,12 lei",  original_price: "834,23 lei",   price_value: 424.12,  currency: "RON (lei)", discount: "Reducere 49%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/pirelli-angel-st-120-70-zr-17-m-c-58w-tl-front/" },
+    { name: "Pirelli Scorpion Rally STR 160/60 R 15 M/C 67H TL",  price: "541,24 lei",  original_price: "1.153,20 lei", price_value: 541.24,  currency: "RON (lei)", discount: "Reducere 53%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/pirelli-scorpion-rally-str-160-60-r-15-m-c-67h-ms-tl-23/" },
+    { name: "Dunlop Sportmax GPR300F 120/70 ZR 17 (58W) TL Front",price: "419,74 lei",  original_price: "736,08 lei",   price_value: 419.74,  currency: "RON (lei)", discount: "Reducere 43%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/dunlop-sportmax-gpr300f-120-70-zr-17-58w-tl-front/" },
+    { name: "Dunlop Sportmax GPR300 160/60 ZR 17 (69W) TL Rear",  price: "529,07 lei",  original_price: "966,44 lei",   price_value: 529.07,  currency: "RON (lei)", discount: "Reducere 45%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/dunlop-sportmax-gpr300-160-60-zr-17-69w-tl-rear/" },
+    { name: "Michelin Road 5 180/55 ZR 17 73(W) TL Rear",         price: "866,60 lei",  original_price: "1.675,72 lei", price_value: 866.60,  currency: "RON (lei)", discount: "Reducere 48%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/michelin-road-5-180-55-zr-17-73-w-tl-rear/" },
+    { name: "Michelin Pilot Power 2CT 120/70 ZR 17 58(W) TL Front",price: "500,52 lei", original_price: "946,08 lei",   price_value: 500.52,  currency: "RON (lei)", discount: "Reducere 47%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/michelin-pilot-power-2ct-120-70-zr-17-58-w-tl-front/" },
+    { name: "Michelin Pilot Power 2CT 180/55 ZR 17 73(W) TL Rear",price: "676,39 lei",  original_price: "1.261,44 lei", price_value: 676.39,  currency: "RON (lei)", discount: "Reducere 46%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/michelin-pilot-power-2ct-180-55-zr-17-73-w-tl-rear/" },
+    { name: "Shinko R230 170/80-15 83V TL Rear",                   price: "438,14 lei",  original_price: "",             price_value: 438.14,  currency: "RON (lei)", discount: "",             in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/shinko-r230-170-80-15-83v-tl-rear-clone/" },
+    { name: "Pirelli Sport Demon 110/70 - 17 M/C 54H TL Front",   price: "466,44 lei",  original_price: "858,76 lei",   price_value: 466.44,  currency: "RON (lei)", discount: "Reducere 46%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/pirelli-sport-demon-110-70-17-m-c-54h-tl-front/" },
+    { name: "Bridgestone Battlax BT021F G 13070ZR17 62W TL Front", price: "670,10 lei",  original_price: "1.391,75 lei", price_value: 670.10,  currency: "RON (lei)", discount: "Reducere 52%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/bridgestone-battlax-bt021f-g-13070zr17-62w-tl-front/" },
+    { name: "Michelin Enduro Medium 140/80 - 18 70R TT Rear",      price: "514,74 lei",  original_price: "939,90 lei",   price_value: 514.74,  currency: "RON (lei)", discount: "Reducere 45%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/michelin-enduro-medium-140-80-18-70r-tt-rear/" },
+    { name: "Michelin Pilot Road 4 180/55 ZR 17 73(W) TL Rear",   price: "762,06 lei",  original_price: "1.446,96 lei", price_value: 762.06,  currency: "RON (lei)", discount: "Reducere 47%", in_stock: true,  shop: "anvelopemoto.eu", source: "anvelopemoto.eu", url: "https://www.anvelopemoto.eu/michelin-pilot-road-4-180-55-zr-17-73-w-tl-rear/" },
+  ];
+  renderData(demo);
+}
+
+function renderData(data) {
+  allData = data;
+  const priced = data.filter(r => r.price_value);
+  bestPrice = priced.length ? Math.min(...priced.map(r => r.price_value)) : Infinity;
+
+  // Stats
+  document.getElementById('stat-count').textContent = data.length;
+  if (priced.length) {
+    document.getElementById('stat-min').textContent = '£' + bestPrice.toFixed(2);
+    const avg = priced.reduce((s, r) => s + r.price_value, 0) / priced.length;
+    document.getElementById('stat-avg').textContent = '£' + avg.toFixed(2);
+  }
+  const sources = [...new Set(data.map(r => r.source))];
+  document.getElementById('stat-sources').textContent = sources.length;
+
+  document.getElementById('status-pill').textContent = 'DATA LOADED';
+  document.getElementById('status-pill').classList.add('live');
+
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('results-table').style.display = 'table';
+
+  renderTable();
+}
+
+function filterTable(val) {
+  filterText = val.toLowerCase();
+  renderTable();
+}
+
+function sortTable(col) {
+  if (sortCol === col) { sortAsc = !sortAsc; }
+  else { sortCol = col; sortAsc = col === 'price_value'; }
+  document.querySelectorAll('thead th').forEach(th => th.classList.remove('sorted'));
+  const el = document.querySelector(`thead th[data-col="${col}"]`);
+  if (el) el.classList.add('sorted');
+  renderTable();
+}
+
+function renderTable() {
+  let data = [...allData];
+
+  if (filterText) {
+    data = data.filter(r =>
+      (r.name + r.shop + r.source + r.price).toLowerCase().includes(filterText)
+    );
+  }
+
+  data.sort((a, b) => {
+    let va = a[sortCol] ?? '';
+    let vb = b[sortCol] ?? '';
+    if (sortCol === 'price_value') {
+      va = va || 99999; vb = vb || 99999;
+      return sortAsc ? va - vb : vb - va;
+    }
+    va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
+    return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+
+  const tbody = document.getElementById('results-body');
+  tbody.innerHTML = data.map(r => {
+    const isBest = r.price_value && Math.abs(r.price_value - bestPrice) < 0.01;
+    const stockBadge = r.in_stock
+      ? '<span style="color:var(--green);font-size:11px;">✓ In stock</span>'
+      : '<span style="color:var(--muted);font-size:11px;">✗ Unavailable</span>';
+    return `<tr class="${isBest ? 'best-price' : ''}">
+      <td class="td-name" title="${r.name}">${r.name}${isBest ? ' 🏆' : ''}</td>
+      <td><span class="price-badge ${isBest ? 'best' : ''}">${r.price}</span></td>
+      <td style="color:var(--muted);text-decoration:line-through;font-size:11px;">${r.original_price || '—'}</td>
+      <td style="color:var(--accent);font-size:11px;">${r.discount || '—'}</td>
+      <td>${stockBadge}</td>
+      <td>${r.url && r.url !== '#' ? `<a class="link-btn" href="${r.url}" target="_blank">VIEW →</a>` : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+buildCmd();
+</script>
+</body>
+</html>
